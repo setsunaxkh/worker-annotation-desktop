@@ -405,15 +405,24 @@ class AnnotationWindow(QMainWindow):
         job.moveToThread(thread)
         thread.started.connect(job.run)
         job.result.connect(self._job_completed, Qt.ConnectionType.QueuedConnection)
-        job.failed.connect(self.show_error, Qt.ConnectionType.QueuedConnection)
+        job.failed.connect(self._job_failed, Qt.ConnectionType.QueuedConnection)
         job.finished.connect(progress.close, Qt.ConnectionType.QueuedConnection)
         job.finished.connect(thread.quit)
         job.finished.connect(job.deleteLater)
+        thread.finished.connect(self._job_thread_finished, Qt.ConnectionType.QueuedConnection)
         thread.finished.connect(thread.deleteLater)
         pair = (thread, job, progress)
         self._jobs.append(pair)
-        thread.finished.connect(lambda: self._jobs.remove(pair) if pair in self._jobs else None)
         thread.start()
+
+    @Slot(str)
+    def _job_failed(self, message):
+        self.show_error(message)
+
+    @Slot()
+    def _job_thread_finished(self):
+        thread = self.sender()
+        self._jobs[:] = [pair for pair in self._jobs if pair[0] is not thread]
 
     @Slot(object)
     def _job_completed(self, payload):
