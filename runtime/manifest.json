@@ -1,0 +1,25 @@
+{
+  "schema": "worker_annotator_runtime_v1",
+  "platform": "windows-x86_64",
+  "provider": "shinchiro/mpv-winbuild-cmake (unofficial third-party Windows build)",
+  "listed_by": "https://mpv.io/installation/",
+  "release": "20260928",
+  "mpv_revision": "e470f8986e",
+  "asset": "mpv-dev-x86_64-20260928-git-e470f8986e.7z",
+  "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260928/mpv-dev-x86_64-20260928-git-e470f8986e.7z",
+  "sha256": "81795d759e01016f1550fd71651a1a5d59ab5c28ef31c0b6793224e9cff39459",
+  "dll_sha256": "0d5b9dbecb73e179ef39dc94314ff8905fab926a80f8d60a2367d824b7254e2e",
+  "release_page": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/tag/20260928",
+  "build_source": "https://github.com/shinchiro/mpv-winbuild-cmake/tree/20260928",
+  "mpv_source": "https://github.com/mpv-player/mpv/tree/e470f8986e",
+  "archive_destination": "runtime/mpv",
+  "cpu": "baseline x86_64 (not the x86_64-v3 asset)",
+  "extractor": {
+    "name": "7zr.exe",
+    "version": "26.04",
+    "url": "https://github.com/ip7z/7zip/releases/download/26.04/7zr.exe",
+    "sha256": "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282",
+    "source": "https://github.com/ip7z/7zip/tree/26.04",
+    "role": "bootstrap only; not shipped in the portable app"
+  }
+}

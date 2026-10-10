@@ -1,0 +1,2 @@
+# Use the audited Windows x64 / Python 3.12 wheel lock for source and builds.
+-r requirements.lock.txt

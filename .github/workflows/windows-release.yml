@@ -1,0 +1,52 @@
+name: Windows portable build
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Bootstrap pinned dependencies and verified native libmpv
+        shell: pwsh
+        run: ./scripts/bootstrap.ps1 -Python (Get-Command python).Source
+      - name: Synthetic data tests
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          ./.venv/Scripts/python.exe -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build portable ZIP and checksum
+        shell: pwsh
+        run: ./scripts/build_portable.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WorkerAnnotator-windows-x64
+          path: release/*
+          if-no-files-found: error
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: WorkerAnnotator-windows-x64
+          path: release
+      - name: Publish private repository release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" release/* --verify-tag --title "Worker Annotator $RELEASE_TAG" --notes "Windows x64 portable application. Extract the entire ZIP and run WorkerAnnotator.exe. No Python or FFmpeg installation required. Source and dependency notices are included in the repository and package."

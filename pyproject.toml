@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "worker-annotation-desktop"
+version = "0.1.0"
+description = "Windows native video worker-state annotation desktop tool"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "GPL-3.0-or-later"
+dependencies = ["PySide6==6.8.3", "python-mpv==1.0.8"]
+
+[project.gui-scripts]
+worker-annotator = "worker_annotator.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
