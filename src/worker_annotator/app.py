@@ -671,6 +671,11 @@ class AnnotationWindow(QMainWindow):
         if not path:
             return False
         try:
+            destination = Path(path).resolve()
+            if destination == self.video_path or (destination.exists() and os.path.samefile(destination, self.video_path)):
+                raise ValueError("不能将标签写入原视频；请选择新的 JSON 文件。")
+            if destination.suffix.lower() != ".json":
+                raise ValueError("标签文件名须以 .json 结尾。")
             self.document.save_as(path, self.tracks)
             self.settings.setValue("output_dir", str(Path(path).parent))
             self.update_title()

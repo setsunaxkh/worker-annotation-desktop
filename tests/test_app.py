@@ -222,6 +222,25 @@ class AppWorkflowTests(unittest.TestCase):
         self.assertTrue(self.window.document.dirty)
         self.assertEqual(original.read_bytes(), before)
 
+    def test_export_refuses_video_original_hardlink_and_non_json_outputs(self):
+        self.open_inputs()
+        self.window.document.add_segment("person-a", 1, 2, "working")
+        original_bytes = self.video.read_bytes()
+        alias = self.root / "video-hardlink.json"
+        os.link(self.video, alias)
+        non_json = self.root / "annotation.txt"
+        non_json.write_bytes(b"existing non-JSON file")
+        with patch.object(self.window, "show_error") as error:
+            for destination in (self.video, alias, non_json):
+                with self.subTest(destination=destination.name), \
+                        patch.object(app_module.QFileDialog, "getSaveFileName", return_value=(str(destination), "JSON")):
+                    self.assertFalse(self.window.export_labels())
+                    self.assertEqual(self.video.read_bytes(), original_bytes)
+                    self.assertEqual(alias.read_bytes(), original_bytes)
+                    self.assertEqual(non_json.read_bytes(), b"existing non-JSON file")
+                    self.assertTrue(self.window.document.dirty)
+        self.assertEqual(error.call_count, 3)
+
     def test_cancel_import_and_video_switch_preserves_current_document(self):
         self.open_inputs()
         self.window.document.add_segment("person-a", 1, 2, "working")
