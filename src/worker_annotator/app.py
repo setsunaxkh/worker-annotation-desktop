@@ -449,6 +449,8 @@ class AnnotationWindow(QMainWindow):
                     raise ValueError("已有标签绑定的轨迹 SHA-256 不同，不能套用同名 ID。")
                 self.tracks = index
                 self.input_label.setText(f"{len(index.ids)} 个已有目标\n{Path(path).name}")
+                if not self.selected_id:
+                    self.target_label.setText("点击画面目标框，或从左侧选择人员。")
                 self.refresh_target_list()
                 self.on_position(self.player.position)
                 self._set_recovery_path()
@@ -601,8 +603,10 @@ class AnnotationWindow(QMainWindow):
                       self._display_time(segment.get("start_time")), self._display_time(segment.get("end_time")), str(segment.get("note", ""))]
             for col, text in enumerate(values):
                 cell = QTableWidgetItem(text)
+                cell.setToolTip(text)
                 cell.setData(Qt.ItemDataRole.UserRole, index)
                 self.table.setItem(row, col, cell)
+        self.table.resizeRowsToContents()
         self.label_summary.setText(f"{len(self.document.segments)} 条人工区间 · 双击可跳转")
         issues = self.document.validate(self.tracks, self.player.duration if hasattr(self, "player") and self._loaded else None)
         self.issues_label.setText(f"输入提示 {len(issues)} 项（保留原区间）" if issues else "")
