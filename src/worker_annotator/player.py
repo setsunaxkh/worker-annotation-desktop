@@ -144,11 +144,37 @@ def _escape_ass(text: str) -> str:
 
 def build_ass_overlay(poses: Iterable[Mapping[str, Any]], geometry: VideoGeometry,
                       selected_id: Any = None, show_skeleton: bool = False,
-                      show_boxes: bool = True) -> str:
+                      show_boxes: bool = True, area_roi=None, core_work_zone=None,
+                      area_id: str = "", show_regions: bool = True) -> str:
     """Render only supplied coordinates; absent/low-confidence joints stay absent."""
     if geometry.width <= 0 or geometry.height <= 0:
         return ""
     events: list[str] = []
+    if show_regions:
+        for points, color, label in ((area_roi, "E0A900", "ROI " + str(area_id)),
+                                     (core_work_zone, "1A8DFF", "核心作业区")):
+            if not points or len(points) < 3:
+                continue
+            mapped = []
+            for point in points:
+                if not isinstance(point, (list, tuple)) or len(point) < 2:
+                    break
+                x, y = _number(point[0]), _number(point[1])
+                if x is None or y is None:
+                    break
+                mapped.append(geometry.source_to_widget(x, y))
+            if len(mapped) != len(points):
+                continue
+            path = "m " + " ".join(f"{v:.2f}" for v in mapped[0]) + " l " + " ".join(f"{x:.2f} {y:.2f}" for x, y in mapped[1:])
+            events.append(f"{{\\an7\\pos(0,0)\\1c&H{color}&\\1a&HEF&\\bord0\\shad0\\p1}}{path}{{\\p0}}")
+            for (x1, y1), (x2, y2) in zip(mapped, mapped[1:] + mapped[:1]):
+                length = math.hypot(x2 - x1, y2 - y1)
+                if length <= 0:
+                    continue
+                dx, dy = -(y2 - y1) * 1.5 / length, (x2 - x1) * 1.5 / length
+                events.append(f"{{\\an7\\pos(0,0)\\1c&H{color}&\\1a&H00&\\bord0\\shad0\\p1}}m {x1+dx:.2f} {y1+dy:.2f} l {x2+dx:.2f} {y2+dy:.2f} {x2-dx:.2f} {y2-dy:.2f} {x1-dx:.2f} {y1-dy:.2f}{{\\p0}}")
+            x, y = mapped[0]
+            events.append(f"{{\\an7\\pos({x+5:.2f},{y+5:.2f})\\fs18\\1c&H{color}&\\1a&H00&\\bord1\\shad0}}{_escape_ass(label)}")
     for pose in poses:
         track_id = _pose_id(pose)
         selected = selected_id is not None and str(track_id) == str(selected_id)
@@ -257,6 +283,10 @@ class NativePlayer(QObject):
         self._selected_id = None
         self._show_skeleton = False
         self._show_boxes = True
+        self._area_roi = []
+        self._core_work_zone = []
+        self._area_id = ""
+        self._show_regions = True
         self._diagnostics: deque[str] = deque(maxlen=8)
         self._observers: list[tuple[str, Any]] = []
         self._bridge.connect(self._receive, Qt.ConnectionType.QueuedConnection)
@@ -497,12 +527,20 @@ class NativePlayer(QObject):
         self._show_boxes = bool(show_boxes)
         self._refresh_overlay()
 
+    def set_regions(self, area_roi=None, core_work_zone=None, area_id="", show=True) -> None:
+        self._area_roi = area_roi or []
+        self._core_work_zone = core_work_zone or []
+        self._area_id = area_id
+        self._show_regions = bool(show)
+        self._refresh_overlay()
+
     @Slot()
     def _refresh_overlay(self) -> None:
         if self._mpv is None or self._closed:
             return
         data = build_ass_overlay(self._poses, self.video_widget.geometry_mapping,
-                                 self._selected_id, self._show_skeleton, self._show_boxes)
+                                 self._selected_id, self._show_skeleton, self._show_boxes,
+                                 self._area_roi, self._core_work_zone, self._area_id, self._show_regions)
         try:
             # python-mpv 1.0.8's helper has a res_Y typo. The documented named
             # node command is also immune to command-string/ASS quoting issues.

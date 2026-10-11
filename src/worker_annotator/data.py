@@ -17,6 +17,8 @@ from statistics import median
 import tempfile
 from typing import Any
 
+from .roi import roi_fields
+
 
 STATE_NAMES = {
     "working": "工作中",
@@ -270,6 +272,17 @@ class AnnotationDocument:
         self._protected_paths.add(original)
         self.dirty = False
 
+    def import_roi(self, path: str | Path) -> dict:
+        original = Path(path).resolve()
+        payload = load_json(original)
+        fields = roi_fields(payload, self.metadata.get("video_width", 0), self.metadata.get("video_height", 0))
+        changed = any(self.metadata.get(k) != v for k, v in fields.items())
+        # Only region fields are applied: labels, source name and clock stay intact.
+        self.metadata.update(deepcopy(fields))
+        self._protected_paths.add(original)
+        self.dirty = self.dirty or changed
+        return payload
+
     def _segment_fields(self, tracklet_id: str, start: float, end: float,
                         state: str, note: str) -> dict:
         track_id = str(tracklet_id).strip()
@@ -347,7 +360,7 @@ class AnnotationDocument:
         destination = Path(path).resolve()
         for original in self._protected_paths:
             if destination == original or (destination.exists() and original.exists() and os.path.samefile(destination, original)):
-                raise ValueError("不能覆盖导入的原始标签；请选择新的文件名。")
+                raise ValueError("不能覆盖导入的原始 JSON；请选择新的文件名。")
         if tracks is not None and tracks.path is not None and (destination == tracks.path or (destination.exists() and os.path.samefile(destination, tracks.path))):
             raise ValueError("不能覆盖只读轨迹文件。")
         payload = self.to_dict(tracks)

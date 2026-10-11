@@ -138,7 +138,7 @@ class DataTests(unittest.TestCase):
         self.assertTrue(any("重叠 0.098" in issue for issue in issues))
         self.assertTrue(any("超出视频时长" in issue for issue in issues))
         self.assertEqual(document.to_dict(tracks), payload)
-        with self.assertRaisesRegex(ValueError, "原始标签"):
+        with self.assertRaisesRegex(ValueError, "原始"):
             document.save_as(path)
         output = self.root / "edited.json"
         document.save_as(output, tracks)

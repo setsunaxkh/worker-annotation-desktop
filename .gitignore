@@ -1,5 +1,7 @@
 .venv/
 .cache/
+打开ROI修复版.cmd
+打开本地修复版.cmd
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -25,4 +27,13 @@ runtime/mpv/
 local-data/
 *_worker_segments*.json
 *_tracks*.json
+# Local dataset preparation helpers and their synthetic tests are separate
+# from the annotation application and use machine-specific model environments.
+/scripts/prepare_annotation_inputs.py
+/scripts/prepare_botsort_annotation_inputs.py
+/scripts/prepare_annotation_batch.py
+/scripts/prepare_annotation_batch.ps1
+/tests/test_prepare_annotation_inputs.py
+/tests/test_prepare_botsort_inputs.py
+/tests/test_prepare_annotation_batch.py
 

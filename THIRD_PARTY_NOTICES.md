@@ -1,6 +1,6 @@
 # Third-party software and source availability
 
-Worker Annotation Desktop 0.1.2 is licensed GPL-3.0-or-later; see LICENSE.
+Worker Annotation Desktop 0.1.5 is licensed GPL-3.0-or-later; see LICENSE.
 These notices do not change each dependency's own license.
 
 ## libmpv / mpv and its linked libraries

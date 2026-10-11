@@ -13,6 +13,9 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QObject, QThread, QTimer, Signal, qInstallMessageHandler
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from worker_annotator import app as app_module
@@ -74,6 +77,9 @@ class FakeNativePlayer(QObject):
         self.overlay = poses
         self.selected = selected
         self.options = options
+
+    def set_regions(self, area=None, core=None, area_id="", show=True):
+        self.regions = (area, core, area_id, show)
 
     def shutdown(self):
         self.closed = True
@@ -155,6 +161,120 @@ class AppWorkflowTests(unittest.TestCase):
                                  "source_end_time": mapping.playback_to_source(3),
                                  "unknown_label": [1, 2]}],
         }
+
+    def test_roi_import_display_toggle_export_and_free_target_selection(self):
+        self.open_inputs()
+        region = {"video_width": 1920, "video_height": 1080, "camera_id": "front", "area_id": "zone-a",
+                  "area_roi": [[1000, 0], [1920, 0], [1920, 1080], [1000, 1080]],
+                  "core_work_zone": [[1100, 100], [1500, 100], [1500, 800], [1100, 800]]}
+        roi_path = self.write("roi.json", region)
+        before = roi_path.read_bytes()
+        self.window.import_roi(roi_path)
+        self.assertIn("zone-a", self.window.roi_info.text())
+        self.assertEqual(self.window.player.regions, (region["area_roi"], region["core_work_zone"], "zone-a", True))
+        self.window.roi_check.setChecked(False)
+        self.assertFalse(self.window.player.regions[3])
+        # Existing target is outside the polygon and remains selectable.
+        self.assertEqual(self.window.target_list.count(), 1)
+        self.window.select_target("person-a")
+        self.assertEqual(self.window.selected_id, "person-a")
+        self.assertEqual(self.window.document.segments, [])
+        output = self.root / "export.json"
+        with patch.object(app_module.QFileDialog, "getSaveFileName", return_value=(str(output), "JSON")):
+            self.assertTrue(self.window.export_labels())
+        for key, value in region.items():
+            self.assertEqual(load_json(output)[key], value)
+        self.assertEqual(roi_path.read_bytes(), before)
+
+    def test_existing_labels_show_saved_roi_without_gt_changes(self):
+        self.open_inputs()
+        payload = self.labels()
+        payload.update(area_id="old-zone", area_roi=[[0, 0], [1920, 0], [1920, 1080], [0, 1080]],
+                       core_work_zone=[], camera_id="front")
+        path = self.write("old-labels.json", payload)
+        before = path.read_bytes()
+        self.window.import_labels(path)
+        self.assertEqual(self.window.document.to_dict(self.window.tracks), payload)
+        self.assertEqual(self.window.player.regions[0], payload["area_roi"])
+        self.assertEqual(self.window.player.regions[2], "old-zone")
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(self.window.document.dirty)
+
+    def test_roi_failure_keeps_current_polygon_and_labels(self):
+        self.open_inputs()
+        region = {"area_id": "safe", "area_roi": [[0, 0], [1920, 0], [1920, 1080], [0, 1080]]}
+        self.window.import_roi(self.write("good-roi.json", region))
+        before = self.window.document.to_dict(self.window.tracks)
+        self.window.import_roi(self.write("bad-roi.json", {**region, "video_width": 1280}))
+        self.assertEqual(self.window.document.to_dict(self.window.tracks), before)
+        self.assertEqual(self.window.player.regions[2], "safe")
+
+    def test_roi_is_retained_when_old_desktop_labels_have_empty_roi(self):
+        self.open_inputs()
+        region = {"area_id": "imported-zone", "camera_id": "front",
+                  "area_roi": [[0, 0], [1920, 0], [1920, 1080], [0, 1080]]}
+        self.window.import_roi(self.write("roi.json", region))
+        labels = self.labels(TimeMapping(10, 1, 0, 1))
+        labels.update(area_roi=[], core_work_zone=[], area_id="", camera_id="")
+        path = self.write("previous-desktop-labels.json", labels)
+        before = path.read_bytes()
+        with patch.object(self.window, "_may_replace", side_effect=AssertionError("ROI-only import must not request an empty-label export")):
+            self.window.import_labels(path)
+        self.assertEqual(self.window.document.segments, labels["worker_segments"])
+        self.assertEqual(self.window.document.mapping, TimeMapping(10, 1, 0, 1))
+        self.assertEqual(self.window.document.metadata["area_roi"], region["area_roi"])
+        self.assertTrue(self.window.document.dirty)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_dark_system_palette_does_not_hide_any_combo_or_header(self):
+        dark = QPalette()
+        dark.setColor(QPalette.ColorRole.Window, QColor("#202020"))
+        dark.setColor(QPalette.ColorRole.Base, QColor("#202020"))
+        dark.setColor(QPalette.ColorRole.Text, QColor("#202020"))
+        self.qt.setPalette(dark)
+        extra = app_module.AnnotationWindow()
+        extra.autosave.stop()
+        dialog = app_module.SegmentDialog({"tracklet_id": "person-a", "start_time": 1, "end_time": 3,
+                                           "worker_state": "working"}, extra)
+        try:
+            for combo in (extra.state_combo, extra.speed, dialog.state):
+                combo.ensurePolished()
+                combo.view().ensurePolished()
+                palette = combo.view().palette()
+                self.assertEqual(palette.color(QPalette.ColorRole.Base).name(), "#ffffff")
+                self.assertEqual(palette.color(QPalette.ColorRole.Text).name(), "#1f2937")
+                self.assertEqual(palette.color(QPalette.ColorRole.HighlightedText).name(), "#ffffff")
+            extra.table.verticalHeader().ensurePolished()
+            self.assertEqual(extra.table.verticalHeader().palette().color(QPalette.ColorRole.Window).name(), "#edf2f8")
+        finally:
+            dialog.close()
+            extra.close()
+            dialog.deleteLater()
+            extra.deleteLater()
+            self.qt.processEvents()
+
+    def test_seconds_buttons_and_arrow_shortcuts_use_seconds(self):
+        self.open_inputs()
+        self.window.show()
+        self.window.activateWindow()
+        self.qt.processEvents()
+        self.window.video.setFocus()
+        self.window.player.seek(8)
+        with patch.object(self.window.player, "step_frame", side_effect=AssertionError("frame stepping must not be used")):
+            self.window.back_second.click()
+            self.assertEqual(self.window.player.position, 7)
+            self.window.forward_second.click()
+            self.assertEqual(self.window.player.position, 8)
+            QTest.keyClick(self.window.video, Qt.Key.Key_Left)
+            self.assertEqual(self.window.player.position, 7)
+            QTest.keyClick(self.window.video, Qt.Key.Key_Right)
+            self.assertEqual(self.window.player.position, 8)
+            QTest.keyClick(self.window.video, Qt.Key.Key_Left, Qt.KeyboardModifier.ShiftModifier)
+            self.assertEqual(self.window.player.position, 3)
+            QTest.keyClick(self.window.video, Qt.Key.Key_Right, Qt.KeyboardModifier.ShiftModifier)
+            self.assertEqual(self.window.player.position, 8)
+        self.assertIn("1 秒", self.window.back_second.text())
+        self.assertIn("1 秒", self.window.forward_second.text())
 
     def test_initialization_and_no_implicit_labels(self):
         self.assertEqual(self.window.document.segments, [])

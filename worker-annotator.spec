@@ -4,7 +4,7 @@ from pathlib import Path
 root = Path(SPECPATH)
 runtime = root / 'runtime' / 'mpv'
 if not (runtime / 'libmpv-2.dll').is_file():
-    raise RuntimeError('Run bootstrap.cmd / scripts/fetch_runtime.py first')
+    raise RuntimeError('Run launch.cmd / scripts/bootstrap.cmd / scripts/fetch_runtime.py first')
 datas = [(str(root / 'LICENSE'), 'licenses'),
          (str(root / 'THIRD_PARTY_NOTICES.md'), 'licenses'),
          (str(root / 'licenses'), 'licenses/upstream'),

@@ -12,6 +12,7 @@ def main() -> int:
     parser.add_argument("--tracks", type=Path)
     parser.add_argument("--labels", type=Path)
     parser.add_argument("--meta", type=Path)
+    parser.add_argument("--roi", type=Path)
     args = parser.parse_args()
     from PySide6.QtCore import QStandardPaths
     from PySide6.QtWidgets import QApplication, QMessageBox
@@ -29,10 +30,10 @@ def main() -> int:
         window = AnnotationWindow()
     except Exception as exc:
         logging.exception("Startup failed")
-        QMessageBox.critical(None, "启动失败", f"{exc}\n\n请先运行 bootstrap.cmd，或使用完整的便携发行包。")
+        QMessageBox.critical(None, "启动失败", f"{exc}\n\n请运行 scripts\\bootstrap.cmd，或使用完整的便携发行包。")
         return 1
     window.show()
-    window.load_startup(args.video, args.tracks, args.labels, args.meta)
+    window.load_startup(args.video, args.tracks, args.labels, args.meta, args.roi)
     return app.exec()
 
 

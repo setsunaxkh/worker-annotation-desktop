@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QObject, QSettings, QStandardPaths, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QColor, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView,
@@ -22,6 +22,40 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .data import AnnotationDocument, STATE_NAMES, TimeMapping, TrackIndex, format_time, load_json
 from .player import NativePlayer, VideoWidget
+from .roi import polygon
+
+
+def apply_light_palette():
+    """Keep popup views and header margins legible on Windows dark themes."""
+    application = QApplication.instance()
+    if application is None:
+        return
+    palette = QPalette()
+    roles = {
+        QPalette.ColorRole.Window: "#f5f7fa",
+        QPalette.ColorRole.WindowText: "#1f2937",
+        QPalette.ColorRole.Base: "#ffffff",
+        QPalette.ColorRole.AlternateBase: "#edf2f8",
+        QPalette.ColorRole.Text: "#1f2937",
+        QPalette.ColorRole.Button: "#ffffff",
+        QPalette.ColorRole.ButtonText: "#1f2937",
+        QPalette.ColorRole.ToolTipBase: "#ffffff",
+        QPalette.ColorRole.ToolTipText: "#1f2937",
+        QPalette.ColorRole.Highlight: "#2563eb",
+        QPalette.ColorRole.HighlightedText: "#ffffff",
+        QPalette.ColorRole.PlaceholderText: "#64748b",
+        QPalette.ColorRole.Light: "#ffffff",
+        QPalette.ColorRole.Midlight: "#edf2f8",
+        QPalette.ColorRole.Mid: "#bcc9d9",
+        QPalette.ColorRole.Dark: "#8395ac",
+        QPalette.ColorRole.Shadow: "#64748b",
+    }
+    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled):
+        for role, color in roles.items():
+            palette.setColor(group, role, QColor(color))
+    for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor("#8391a3"))
+    application.setPalette(palette)
 
 
 class _Job(QObject):
@@ -87,6 +121,7 @@ class SegmentDialog(QDialog):
 class AnnotationWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        apply_light_palette()
         self.resize(1500, 930)
         self.setMinimumSize(1050, 650)
         self.settings = QSettings()
@@ -102,6 +137,7 @@ class AnnotationWindow(QMainWindow):
         self._startup_inputs = None
         self._meta_expected_sha = None
         self._loaded = False
+        self._roi_source = ""
         self._build_ui()
         self.player = NativePlayer(self.video, self)
         self.player.position_changed.connect(self.on_position)
@@ -111,6 +147,7 @@ class AnnotationWindow(QMainWindow):
         self.player.error.connect(self.show_error)
         self.video.clicked.connect(self.select_from_video)
         self.video.resized.connect(self.refresh_overlay)
+        self.sync_roi_view()
         self._install_shortcuts()
         self.autosave = QTimer(self)
         self.autosave.setInterval(10000)
@@ -135,15 +172,20 @@ class AnnotationWindow(QMainWindow):
             QToolButton { padding: 5px 8px; background: #ffffff; }
             QToolButton:hover { background: #e7f0ff; }
             QLineEdit, QDoubleSpinBox, QComboBox { padding: 4px; background: #ffffff; border: 1px solid #bcc9d9; border-radius: 3px; }
+            QComboBox QAbstractItemView { background: #ffffff; color: #1f2937; selection-background-color: #2563eb; selection-color: #ffffff; border: 1px solid #bcc9d9; outline: 0; }
+            QComboBox QAbstractItemView::item { background: #ffffff; color: #1f2937; min-height: 24px; }
+            QComboBox QAbstractItemView::item:selected { background: #2563eb; color: #ffffff; }
             QListWidget, QTableWidget { background: #ffffff; gridline-color: #e0e6ee; selection-background-color: #dceaff; selection-color: #102b50; }
+            QHeaderView { background: #edf2f8; color: #1f2937; }
             QHeaderView::section { background: #edf2f8; color: #1f2937; padding: 5px; border: 1px solid #d5dce5; }
+            QTableCornerButton::section { background: #edf2f8; border: 1px solid #d5dce5; }
             QCheckBox::indicator { width: 14px; height: 14px; background: #ffffff; border: 1px solid #8395ac; border-radius: 2px; }
             QCheckBox::indicator:checked { background: #2563eb; border: 1px solid #2563eb; }
         """)
         bar = QToolBar("输入与保存", self)
         bar.setMovable(False)
         self.addToolBar(bar)
-        for name, fn in [("打开原视频", self.choose_video), ("导入轨迹 JSON", self.choose_tracks),
+        for name, fn in [("打开原视频", self.choose_video), ("导入 ROI JSON", self.choose_roi), ("导入轨迹 JSON", self.choose_tracks),
                          ("导入已有标签", self.choose_labels), ("时间对齐", self.configure_mapping),
                          ("导出标签 JSON", self.export_labels), ("操作说明", self.show_help)]:
             action = QAction(name, self)
@@ -172,6 +214,16 @@ class AnnotationWindow(QMainWindow):
         left_layout.addWidget(self.target_list, 1)
         left_layout.addWidget(self._button("跳到所选目标首次出现", self.seek_target_start))
         left_layout.addWidget(self.input_label)
+        region_group = QGroupBox("ROI 区域")
+        region_layout = QVBoxLayout(region_group)
+        self.roi_info = QLabel("未导入 ROI")
+        self.roi_info.setWordWrap(True)
+        region_layout.addWidget(self.roi_info)
+        self.roi_check = QCheckBox("显示 ROI / 核心作业区")
+        self.roi_check.setChecked(True)
+        self.roi_check.toggled.connect(self.sync_roi_view)
+        region_layout.addWidget(self.roi_check)
+        left_layout.addWidget(region_group)
         self.boxes_check = QCheckBox("显示目标框")
         self.boxes_check.setChecked(True)
         self.boxes_check.toggled.connect(self.refresh_overlay)
@@ -195,8 +247,10 @@ class AnnotationWindow(QMainWindow):
         controls.addWidget(self.play_button)
         controls.addWidget(self._button("−5 秒", lambda: self.player.seek_relative(-5)))
         controls.addWidget(self._button("+5 秒", lambda: self.player.seek_relative(5)))
-        controls.addWidget(self._button("前一帧", lambda: self.player.step_frame(True)))
-        controls.addWidget(self._button("后一帧", lambda: self.player.step_frame(False)))
+        self.back_second = self._button("−1 秒  [←]", lambda: self.player.seek_relative(-1))
+        self.forward_second = self._button("+1 秒  [→]", lambda: self.player.seek_relative(1))
+        controls.addWidget(self.back_second)
+        controls.addWidget(self.forward_second)
         self.speed = QComboBox()
         for value in [0.25, 0.5, 1, 1.5, 2, 4]:
             self.speed.addItem(f"{value}×", value)
@@ -273,16 +327,21 @@ class AnnotationWindow(QMainWindow):
 
     def _install_shortcuts(self):
         for key, fn in [("Space", self.player.toggle_pause), ("I", self.mark_start), ("O", self.mark_end),
-                        ("Return", self.add_segment), ("Left", lambda: self.player.seek_relative(-5)),
-                        ("Right", lambda: self.player.seek_relative(5)),
-                        (",", lambda: self.player.step_frame(True)), (".", lambda: self.player.step_frame(False)),
+                        ("Return", self.add_segment), ("Left", lambda: self.player.seek_relative(-1)),
+                        ("Right", lambda: self.player.seek_relative(1)),
+                        ("Shift+Left", lambda: self.player.seek_relative(-5)),
+                        ("Shift+Right", lambda: self.player.seek_relative(5)),
                         ("Ctrl+S", self.export_labels)]:
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.activated.connect(lambda callback=fn, hotkey=key: self._shortcut(callback, hotkey))
 
     def _shortcut(self, callback, key):
         focus = QApplication.focusWidget()
-        if key != "Ctrl+S" and isinstance(focus, (QLineEdit, QDoubleSpinBox, QComboBox)):
+        if key != "Ctrl+S" and isinstance(focus, (QLineEdit, QDoubleSpinBox)):
+            return
+        if isinstance(focus, QComboBox) and key not in ("Left", "Right", "Shift+Left", "Shift+Right", "Ctrl+S"):
+            return
+        if QApplication.activePopupWidget() is not None:
             return
         callback()
 
@@ -336,6 +395,7 @@ class AnnotationWindow(QMainWindow):
         self._draft_id = None
         self._loaded = False
         self._meta_expected_sha = None
+        self._roi_source = ""
         self.target_list.clear()
         self.input_label.setText("未导入轨迹：可播放；导入后可选目标。")
         self.target_label.setText("请导入对应轨迹 JSON。")
@@ -343,6 +403,7 @@ class AnnotationWindow(QMainWindow):
         self.source_label.setToolTip(str(path))
         self.refresh_segments()
         self.player.set_overlay([])
+        self.sync_roi_view()
         self.player.load(str(path))
         self.update_title()
         return True
@@ -353,10 +414,11 @@ class AnnotationWindow(QMainWindow):
         self.video.source_dimensions(width, height)
         self.document.metadata["video_width"] = width
         self.document.metadata["video_height"] = height
+        self.sync_roi_view()
         self.source_label.setText(f"{self.video_path.name if self.video_path else ''}  ·  {width}×{height}  ·  {info.get('codec', '')}  ·  原件播放")
         self.on_duration(float(info.get("duration") or self.player.duration or 0))
         if self._startup_inputs:
-            tracks, labels, meta = self._startup_inputs
+            tracks, labels, meta, roi = self._startup_inputs
             self._startup_inputs = None
             try:
                 if meta:
@@ -364,14 +426,19 @@ class AnnotationWindow(QMainWindow):
             except Exception as exc:
                 self.show_error(str(exc))
                 return
+            def load_labels_then_roi():
+                if labels:
+                    self.import_labels(Path(labels), after=lambda: self.import_roi(Path(roi)) if roi else None)
+                elif roi:
+                    self.import_roi(Path(roi))
             if tracks:
-                self.import_tracks(Path(tracks), after=lambda: self.import_labels(Path(labels)) if labels else None)
-            elif labels:
-                self.import_labels(Path(labels))
+                self.import_tracks(Path(tracks), after=load_labels_then_roi)
+            else:
+                load_labels_then_roi()
 
-    def load_startup(self, video=None, tracks=None, labels=None, meta=None):
+    def load_startup(self, video=None, tracks=None, labels=None, meta=None, roi=None):
         if video:
-            self._startup_inputs = (tracks, labels, meta)
+            self._startup_inputs = (tracks, labels, meta, roi)
             QTimer.singleShot(0, lambda: self.open_video(Path(video)))
 
     def on_duration(self, seconds):
@@ -441,6 +508,55 @@ class AnnotationWindow(QMainWindow):
         if path:
             self.import_tracks(path)
 
+    def choose_roi(self):
+        if not self._loaded:
+            self.show_error("请先打开对应的完整原视频，再导入 ROI JSON。")
+            return
+        path = self._pick("导入已有 ROI JSON（原视频像素坐标）", "JSON (*.json)")
+        if path:
+            self.import_roi(path)
+
+    def import_roi(self, path):
+        if not self._loaded:
+            self.show_error("请先打开对应的完整原视频。")
+            return
+        try:
+            payload = self.document.import_roi(path)
+            self._roi_source = Path(path).name
+            self.sync_roi_view()
+            self.update_title()
+            self.save_recovery()
+            declared_name = payload.get("video_name", "")
+            hint = f"（来源：{declared_name}；请核对区域位置）" if declared_name and declared_name != self.video_path.name else ""
+            self.statusBar().showMessage(f"ROI 已导入：{self.document.metadata.get('area_id') or '未命名区域'}。原区间保留，可继续选择任意目标。{hint}")
+        except Exception as exc:
+            self.show_error(str(exc))
+
+    def sync_roi_view(self, *_):
+        metadata = self.document.metadata
+        width, height = metadata.get("video_width", 0), metadata.get("video_height", 0)
+        invalid = []
+        regions = []
+        for key, name in (("area_roi", "ROI"), ("core_work_zone", "核心作业区")):
+            try:
+                regions.append(polygon(metadata.get(key, []), name, width, height, allow_empty=True))
+            except ValueError as exc:
+                regions.append([])
+                invalid.append(str(exc))
+        area, core = regions
+        if area:
+            text = f"区域：{metadata.get('area_id') or '未命名'}\nROI {len(area)} 点"
+            if metadata.get("camera_id"):
+                text += f" · {metadata['camera_id']}"
+            if core:
+                text += f"\n核心作业区 {len(core)} 点"
+        else:
+            text = "未导入 ROI" if not invalid else "ROI 数据不可显示（原字段保留）"
+        self.roi_info.setText(text)
+        self.roi_info.setToolTip("\n".join(([self._roi_source] if self._roi_source else []) + invalid))
+        if hasattr(self, "player"):
+            self.player.set_regions(area, core, metadata.get("area_id", ""), self.roi_check.isChecked())
+
     def import_tracks(self, path, after=None):
         if self.document.segments and self.tracks:
             self.show_error("当前已有标签与轨迹绑定；请先导出，再重新打开视频切换轨迹。")
@@ -480,8 +596,10 @@ class AnnotationWindow(QMainWindow):
         if path:
             self.import_labels(path)
 
-    def import_labels(self, path):
-        if not self._may_replace():
+    def import_labels(self, path, after=None):
+        # A freshly imported ROI contains no manual GT to discard. Do not ask
+        # the user to export an empty label file before loading existing labels.
+        if (self.document.segments or self.document.imported_path) and not self._may_replace():
             return
         fresh = AnnotationDocument()
         def read():
@@ -505,11 +623,26 @@ class AnnotationWindow(QMainWindow):
                 return
             if self.tracks:
                 self.tracks.mapping = document.mapping
+            # Older desktop exports may have no ROI. Retain an explicitly
+            # imported region in that case, while leaving all GT intervals intact.
+            borrowed = False
+            if not document.metadata.get("area_roi") and self.document.metadata.get("area_roi"):
+                for key in ("area_roi", "core_work_zone", "camera_id", "area_id"):
+                    if not document.metadata.get(key) and self.document.metadata.get(key):
+                        document.metadata[key] = copy.deepcopy(self.document.metadata[key])
+                document.dirty = True
+                borrowed = True
+            document._protected_paths.update(self.document._protected_paths)
+            if not borrowed:
+                self._roi_source = Path(path).name
             self.document = document
+            self.sync_roi_view()
             self.refresh_segments()
             self.on_position(self.player.position)
             self.update_title()
             self.statusBar().showMessage(f"已复用 {len(document.segments)} 条人工标签；导出将另存，原文件保留。")
+            if after:
+                after()
         self._run_job("正在读取已有人工标签…", read, done)
 
     def refresh_target_list(self, *_):
@@ -798,6 +931,7 @@ class AnnotationWindow(QMainWindow):
                 self.document.import_file(self._recovery_path, self.tracks)
                 self.document.dirty = True
                 self.tracks.mapping = self.document.mapping
+                self.sync_roi_view()
                 self.refresh_segments()
                 self.update_title()
             except Exception as exc:
@@ -805,11 +939,12 @@ class AnnotationWindow(QMainWindow):
 
     def show_help(self):
         QMessageBox.information(self, "最短操作说明",
-            "1. 打开完整原视频；导入该视频的 pose_tracks.json。已有标签可直接导入复用。\n"
+            "1. 打开完整原视频；导入 ROI JSON 和对应的 pose_tracks.json。已有标签可直接导入复用，并显示其中的 ROI。\n"
             "2. 点击画面目标框，或从左侧选择任意轨迹；双击轨迹跳到首次出现。\n"
             "3. I 取开始，O 取结束，选状态后添加区间；串人按实际区间标记‘跟踪错误’。\n"
             "4. Ctrl+S 另存 JSON，原标签文件不覆盖。\n\n"
-            "Space 播放/暂停；左右键 ±5秒；逗号/句号前后逐帧。\n"
+            "Space 播放/暂停；左右方向键 ±1秒；Shift＋左右方向键 ±5秒。\n"
+            "蓝色区域为 ROI，橙色区域为核心作业区；可在左侧切换显示。ROI 不裁剪视频或限制目标选择。\n"
             "草稿每10秒保存在本机应用数据目录。目标框来自已导入轨迹，骨架只显示已有可信关节。")
 
     def closeEvent(self, event):

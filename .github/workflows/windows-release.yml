@@ -40,11 +40,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: WorkerAnnotator-windows-x64
           path: release
-      - name: Publish private repository release
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -53,5 +54,5 @@ jobs:
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release/* --clobber
           else
-            gh release create "$RELEASE_TAG" release/* --verify-tag --title "Worker Annotator $RELEASE_TAG" --notes "Windows x64 portable application. Extract the entire ZIP and run WorkerAnnotator.exe. No Python or FFmpeg installation required. Source and dependency notices are included in the repository and package."
+            gh release create "$RELEASE_TAG" release/* --verify-tag --title "Worker Annotator $RELEASE_TAG" --notes-file RELEASE_NOTES.md
           fi
